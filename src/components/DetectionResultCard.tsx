@@ -10,7 +10,7 @@ import {
   PhoneOff,
   AlertTriangle,
   Sparkles,
-  Info
+  HelpCircle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import type { ApiAnalysisResponse } from '../lib/apiClient';
@@ -28,11 +28,18 @@ export const DetectionResultCard: React.FC<DetectionResultCardProps> = ({
   onExportReport,
   onTriggerVerification
 }) => {
-  const isCritical = result.risk_level === 'CRITICAL' || result.risk_level === 'HIGH' || result.classification === 'AI_GENERATED' || result.classification === 'VOICE_CLONED';
-  const isSuspicious = result.risk_level === 'MEDIUM' || result.classification === 'REPLAY_ATTACK';
+  const isHuman = result.classification === 'HUMAN';
+  const isAiGenerated = result.classification === 'AI_GENERATED';
+  const isVoiceCloned = result.classification === 'VOICE_CLONED';
+  const isReplay = result.classification === 'REPLAY_ATTACK';
+  const isUnknown = result.classification === 'UNKNOWN';
+
+  const isCritical = result.risk_level === 'CRITICAL' || isAiGenerated || isVoiceCloned;
+  const isHigh = result.risk_level === 'HIGH' || isReplay;
+  const isMedium = result.risk_level === 'MEDIUM' || isUnknown;
 
   useEffect(() => {
-    if (!isCritical && result.classification === 'AUTHENTIC') {
+    if (isHuman && result.detection_confidence >= 0.70) {
       confetti({
         particleCount: 65,
         spread: 80,
@@ -40,22 +47,47 @@ export const DetectionResultCard: React.FC<DetectionResultCardProps> = ({
         colors: ['#22C55E', '#38BDF8', '#F97316']
       });
     }
-  }, [result, isCritical]);
+  }, [result, isHuman]);
 
-  // SVG Gauge calculations
+  // SVG Gauge calculations (Security Risk Score)
   const radius = 72;
   const circumference = 2 * Math.PI * radius;
-  const displayScore = result.risk_score;
-  const strokeDashoffset = circumference - (displayScore / 100) * circumference;
+  const displayRiskScore = result.risk_score;
+  const strokeDashoffset = circumference - (displayRiskScore / 100) * circumference;
 
-  const aiProbStr = `${(result.ai_probability * 100).toFixed(1)}%`;
-  const spoofLikelihoodStr = `${(result.spoof_probability * 100).toFixed(1)}%`;
+  const detectionConfidenceStr = `${(result.detection_confidence * 100).toFixed(1)}%`;
+  const aiLikelihoodStr = `${(result.ai_likelihood * 100).toFixed(1)}%`;
+  const spoofLikelihoodStr = `${(result.spoof_likelihood * 100).toFixed(1)}%`;
   const similarityStr = `${(result.voice_similarity * 100).toFixed(1)}%`;
-  const confidenceStr = `${(result.confidence * 100).toFixed(1)}%`;
+
+  // Headline Title by Primary Classification
+  const headlineTitle = isHuman
+    ? 'HUMAN VOICE DETECTED'
+    : isVoiceCloned
+    ? 'VOICE CLONE DETECTED'
+    : isAiGenerated
+    ? 'AI-GENERATED VOICE DETECTED'
+    : isReplay
+    ? 'POSSIBLE REPLAY ATTACK'
+    : 'UNABLE TO VERIFY';
+
+  const headlineColor = isHuman
+    ? '#15803D'
+    : isCritical
+    ? '#C2410C'
+    : isHigh
+    ? '#D97706'
+    : '#64748B';
+
+  const statusBadgeClass = isHuman
+    ? 'badge-vox-safe'
+    : isCritical || isHigh
+    ? 'badge-vox-critical'
+    : 'badge-vox-secondary';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      {/* 16. DEMO MODE BADGE (If is_demo is True) */}
+      {/* DEMO MODE BADGE (If is_demo is True) */}
       {result.is_demo && (
         <div style={{
           background: 'rgba(249, 115, 22, 0.12)',
@@ -74,7 +106,7 @@ export const DetectionResultCard: React.FC<DetectionResultCardProps> = ({
             <span>DEMO / SIMULATED ANALYSIS</span>
           </div>
           <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-            Simulated reference sample analysis
+            Simulated sample recording analysis
           </span>
         </div>
       )}
@@ -86,14 +118,14 @@ export const DetectionResultCard: React.FC<DetectionResultCardProps> = ({
             DETECTION ENGINE: {result.detection_engine.toUpperCase()}
           </span>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 800, marginTop: '2px' }}>
-            Forensic Report: {result.filename}
+            Voice Authenticity Report: {result.filename}
           </h2>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <button className="btn-vox-secondary" onClick={onExportReport}>
             <Download size={16} />
-            Export Log (JSON)
+            Export Report (JSON)
           </button>
           <button className="btn-vox-secondary" onClick={onReset}>
             <RefreshCw size={16} />
@@ -102,14 +134,14 @@ export const DetectionResultCard: React.FC<DetectionResultCardProps> = ({
         </div>
       </div>
 
-      {/* Main Detection Risk Card */}
+      {/* Main Detection Result Card - Product Hierarchy */}
       <div className="vox-card" style={{
         padding: '32px',
-        borderLeft: `6px solid ${isCritical ? '#F97316' : isSuspicious ? '#F59E0B' : '#22C55E'}`,
+        borderLeft: `6px solid ${headlineColor}`,
         background: isCritical ? 'linear-gradient(180deg, #FFFFFF 0%, #FFF7ED 100%)' : '#FFFFFF'
       }}>
         <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: '36px', alignItems: 'center' }}>
-          {/* Circular Risk Gauge */}
+          {/* Security Risk Gauge (Threat Level 0-100) */}
           <div style={{
             background: '#FFFFFF',
             border: '1px solid var(--border-light)',
@@ -136,7 +168,7 @@ export const DetectionResultCard: React.FC<DetectionResultCardProps> = ({
                   cy="82.5"
                   r={radius}
                   fill="transparent"
-                  stroke={isCritical ? '#F97316' : isSuspicious ? '#F59E0B' : '#22C55E'}
+                  stroke={headlineColor}
                   strokeWidth="13"
                   strokeDasharray={circumference}
                   strokeDashoffset={strokeDashoffset}
@@ -153,8 +185,8 @@ export const DetectionResultCard: React.FC<DetectionResultCardProps> = ({
                 alignItems: 'center',
                 justifyContent: 'center'
               }}>
-                <span style={{ fontSize: '2.5rem', fontWeight: 800, fontFamily: 'var(--font-heading)', color: isCritical ? '#C2410C' : isSuspicious ? '#D97706' : '#15803D' }}>
-                  {displayScore}
+                <span style={{ fontSize: '2.5rem', fontWeight: 800, fontFamily: 'var(--font-heading)', color: headlineColor }}>
+                  {displayRiskScore}
                 </span>
                 <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.05em' }}>
                   / 100 RISK SCORE
@@ -163,65 +195,65 @@ export const DetectionResultCard: React.FC<DetectionResultCardProps> = ({
             </div>
 
             <div style={{ marginTop: '16px' }}>
-              {isCritical ? (
-                <span className="badge-vox-critical" style={{ padding: '6px 16px', fontSize: '0.85rem' }}>
-                  <AlertOctagon size={16} /> {result.risk_level} RISK
-                </span>
-              ) : isSuspicious ? (
-                <span className="badge-vox-critical" style={{ background: 'rgba(245, 158, 11, 0.1)', color: '#D97706', borderColor: 'rgba(245, 158, 11, 0.3)', padding: '6px 16px', fontSize: '0.85rem' }}>
-                  <AlertTriangle size={16} /> MEDIUM RISK
-                </span>
-              ) : (
-                <span className="badge-vox-safe" style={{ padding: '6px 16px', fontSize: '0.85rem' }}>
-                  <ShieldCheck size={16} /> LOW RISK (AUTHENTIC)
-                </span>
-              )}
+              <span className={statusBadgeClass} style={{ padding: '6px 16px', fontSize: '0.85rem' }}>
+                {isHuman ? (
+                  <><ShieldCheck size={16} /> LOW RISK (AUTHENTIC)</>
+                ) : isUnknown ? (
+                  <><HelpCircle size={16} /> UNCERTAIN / MEDIUM RISK</>
+                ) : (
+                  <><AlertOctagon size={16} /> {result.risk_level} SECURITY RISK</>
+                )}
+              </span>
             </div>
           </div>
 
-          {/* Headline & 4 Metrics */}
+          {/* 1. PRIMARY CLASSIFICATION HEADLINE & CONFIDENCE */}
           <div>
-            <span style={{ fontSize: '0.78rem', fontWeight: 800, color: isCritical ? '#C2410C' : isSuspicious ? '#D97706' : '#15803D', letterSpacing: '0.08em' }}>
-              CLASSIFICATION: {result.classification}
-            </span>
-            <h2 style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--text-dark)', marginTop: '2px' }}>
-              {result.classification === 'AI_GENERATED' || result.classification === 'VOICE_CLONED'
-                ? 'POSSIBLE AI-GENERATED VOICE'
-                : result.classification === 'REPLAY_ATTACK'
-                ? 'REPLAY / AUDIO SPLICING DETECTED'
-                : 'AUTHENTIC VOICE CHARACTERISTICS'}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: headlineColor, letterSpacing: '0.08em' }}>
+                PRIMARY VOICE CLASSIFICATION
+              </span>
+              <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--brand-sky)', background: 'rgba(56, 189, 248, 0.1)', padding: '4px 10px', borderRadius: '6px' }}>
+                Detection Confidence: {detectionConfidenceStr}
+              </span>
+            </div>
+
+            <h2 style={{ fontSize: '2.1rem', fontWeight: 800, color: headlineColor, marginTop: '4px' }}>
+              {headlineTitle}
             </h2>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', marginTop: '6px', lineHeight: '1.5' }}>
+
+            {/* Probabilistic Explanation Message */}
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.98rem', marginTop: '8px', lineHeight: '1.5' }}>
               {result.recommendation}
             </p>
 
-            {/* 4 Returned Metrics */}
+            {/* 4. SUPPORTING METRICS */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px', marginTop: '24px' }}>
               <div style={{ background: '#F8FAFC', border: '1px solid var(--border-light)', padding: '12px', borderRadius: '10px', textAlign: 'center' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700, display: 'block' }}>AI PROBABILITY</span>
-                <span style={{ fontSize: '1.2rem', fontWeight: 800, color: isCritical ? '#C2410C' : '#15803D' }}>
-                  {aiProbStr}
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700, display: 'block' }}>AI LIKELIHOOD</span>
+                <span style={{ fontSize: '1.25rem', fontWeight: 800, color: isHuman ? '#15803D' : '#C2410C' }}>
+                  {aiLikelihoodStr}
                 </span>
               </div>
 
               <div style={{ background: '#F8FAFC', border: '1px solid var(--border-light)', padding: '12px', borderRadius: '10px', textAlign: 'center' }}>
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700, display: 'block' }}>SPOOF LIKELIHOOD</span>
-                <span style={{ fontSize: '1.2rem', fontWeight: 800, color: isCritical ? '#C2410C' : '#15803D' }}>
+                <span style={{ fontSize: '1.25rem', fontWeight: 800, color: isHuman ? '#15803D' : '#C2410C' }}>
                   {spoofLikelihoodStr}
                 </span>
               </div>
 
               <div style={{ background: '#F8FAFC', border: '1px solid var(--border-light)', padding: '12px', borderRadius: '10px', textAlign: 'center' }}>
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700, display: 'block' }}>SIMILARITY INDEX</span>
-                <span style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--text-dark)' }}>
+                <span style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-dark)' }}>
                   {similarityStr}
                 </span>
               </div>
 
               <div style={{ background: '#F8FAFC', border: '1px solid var(--border-light)', padding: '12px', borderRadius: '10px', textAlign: 'center' }}>
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700, display: 'block' }}>MODEL CONFIDENCE</span>
-                <span style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--brand-sky)' }}>
-                  {confidenceStr}
+                <span style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--brand-sky)' }}>
+                  {detectionConfidenceStr}
                 </span>
               </div>
             </div>
@@ -229,17 +261,16 @@ export const DetectionResultCard: React.FC<DetectionResultCardProps> = ({
         </div>
       </div>
 
-      {/* 13. Returned Forensic Evidence Signals */}
+      {/* 5. FORENSIC EVIDENCE SIGNALS */}
       <div>
         <h3 style={{ fontSize: '1.15rem', fontWeight: 700, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Cpu size={20} color="var(--brand-sky)" />
-          DETECTED FORENSIC SIGNALS
+          SUPPORTING ACOUSTIC FORENSIC SIGNALS
         </h3>
 
         {result.signals.length === 0 ? (
           <div className="vox-card" style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>
-            <Info size={24} style={{ opacity: 0.5, marginBottom: '8px' }} />
-            <p style={{ fontSize: '0.9rem' }}>Insufficient evidence for a specific forensic explanation.</p>
+            <p style={{ fontSize: '0.9rem' }}>No abnormal acoustic signals reported.</p>
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '18px' }}>
@@ -270,16 +301,16 @@ export const DetectionResultCard: React.FC<DetectionResultCardProps> = ({
         )}
       </div>
 
-      {/* Recommended Action Card */}
-      {isCritical && (
-        <div className="vox-card-navy" style={{ padding: '32px', borderLeft: '6px solid #F97316' }}>
+      {/* 6. RECOMMENDED ACTION CARD (For Threats or Verification) */}
+      {(isCritical || isHigh || isMedium) && (
+        <div className="vox-card-navy" style={{ padding: '32px', borderLeft: `6px solid ${isCritical ? '#F97316' : '#F59E0B'}` }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '20px' }}>
             <div>
               <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#F97316', letterSpacing: '0.08em' }}>
-                RECOMMENDED ACTION • SECURITY PROTOCOL
+                RECOMMENDED SECURITY PROTOCOL
               </span>
               <h3 style={{ fontSize: '1.6rem', fontWeight: 800, marginTop: '2px', color: '#FFFFFF' }}>
-                HALT TRANSACTION & VERIFY IDENTITY
+                {isUnknown ? 'RECORD LONGER SAMPLE OR VERIFY IDENTITY' : 'HALT TRANSACTION & VERIFY IDENTITY'}
               </h3>
               <p style={{ color: '#94A3B8', fontSize: '0.95rem', marginTop: '6px', maxWidth: '640px' }}>
                 {result.recommendation}

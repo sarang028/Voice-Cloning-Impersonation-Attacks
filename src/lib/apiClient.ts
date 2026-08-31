@@ -6,12 +6,12 @@ export interface ApiForensicSignal {
 }
 
 export interface ApiAnalysisResponse {
-  classification: 'AUTHENTIC' | 'AI_GENERATED' | 'VOICE_CLONED' | 'REPLAY_ATTACK' | 'UNKNOWN';
-  ai_probability: number; // 0.0 to 1.0
-  spoof_probability: number; // 0.0 to 1.0
+  classification: 'HUMAN' | 'AI_GENERATED' | 'VOICE_CLONED' | 'REPLAY_ATTACK' | 'UNKNOWN';
+  detection_confidence: number; // 0.0 to 1.0
+  ai_likelihood: number; // 0.0 to 1.0
+  spoof_likelihood: number; // 0.0 to 1.0
   voice_similarity: number; // 0.0 to 1.0
-  confidence: number; // 0.0 to 1.0
-  risk_score: number; // 0 to 100
+  risk_score: number; // 0 to 100 Security Risk
   risk_level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   signals: ApiForensicSignal[];
   recommendation: string;
@@ -49,7 +49,6 @@ export async function validateAudioFile(file: File | Blob): Promise<{ duration: 
     return { duration, isValid: true };
   } catch (err) {
     console.warn('Audio decoding warning:', err);
-    // If browser cannot decode raw webm blob ahead of time, allow server to validate
     return { duration: 1.5, isValid: true };
   }
 }
@@ -61,7 +60,6 @@ export async function analyzeAudioViaApi(
 ): Promise<ApiAnalysisResponse> {
   console.log(`[VoxShield API] Upload started: filename='${file.name}', size=${file.size} bytes, is_demo=${isDemoMode}`);
 
-  // Validate Audio
   const validation = await validateAudioFile(file);
   if (!validation.isValid) {
     throw new Error(validation.error || 'Invalid audio file.');

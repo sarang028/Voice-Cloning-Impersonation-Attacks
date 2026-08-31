@@ -93,8 +93,8 @@ function App() {
         file_size: file.size,
         duration: result.duration_seconds,
         format: file.name.split('.').pop()?.toUpperCase() || 'WAV',
-        result_label: result.classification === 'AUTHENTIC' ? 'REAL' : result.classification === 'AI_GENERATED' || result.classification === 'VOICE_CLONED' ? 'FAKE' : 'SUSPICIOUS',
-        confidence_score: Math.round(result.confidence * 100),
+        result_label: result.classification === 'HUMAN' ? 'REAL' : result.classification === 'AI_GENERATED' || result.classification === 'VOICE_CLONED' ? 'FAKE' : 'SUSPICIOUS',
+        confidence_score: Math.round(result.detection_confidence * 100),
         pitch_variance_score: 88,
         spectral_centroid_score: 92,
         harmonic_distortion_score: 90,
@@ -136,13 +136,46 @@ function App() {
       }
     }
 
+    const numChannels = 1;
+    const bitDepth = 16;
+    const samples = data;
+    const dataLength = samples.length * 2;
+    const bufferLength = 44 + dataLength;
+    const arrayBuffer = new ArrayBuffer(bufferLength);
+    const view = new DataView(arrayBuffer);
+
+    const writeString = (offset: number, string: string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    };
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + dataLength, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * numChannels * 2, true);
+    view.setUint16(32, numChannels * 2, true);
+    view.setUint16(34, bitDepth, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataLength, true);
+
+    let offset = 44;
+    for (let i = 0; i < samples.length; i++, offset += 2) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+
     await audioCtx.close();
 
     const fileName = sampleType === 'real' ? 'human_demo_sample.wav' : 'ai_clone_demo_sample.wav';
-    const audioBlob = new Blob([data.buffer], { type: 'audio/wav' });
+    const audioBlob = new Blob([arrayBuffer], { type: 'audio/wav' });
     const sampleFile = new File([audioBlob], fileName, { type: 'audio/wav' });
 
-    // Explicitly pass isDemoMode = true
     await handleProcessFile(sampleFile, true);
   };
 
@@ -252,19 +285,19 @@ function App() {
             onDeleteScan={handleDeleteScan}
             onSelectScan={(scanRecord) => {
               setCurrentResult({
-                classification: scanRecord.result_label === 'REAL' ? 'AUTHENTIC' : scanRecord.result_label === 'FAKE' ? 'AI_GENERATED' : 'REPLAY_ATTACK',
-                ai_probability: scanRecord.result_label === 'REAL' ? 0.05 : 0.94,
-                spoof_probability: scanRecord.result_label === 'REAL' ? 0.03 : 0.91,
-                voice_similarity: 0.95,
-                confidence: scanRecord.confidence_score / 100,
-                risk_score: scanRecord.result_label === 'REAL' ? 5 : 94,
+                classification: scanRecord.result_label === 'REAL' ? 'HUMAN' : scanRecord.result_label === 'FAKE' ? 'AI_GENERATED' : 'REPLAY_ATTACK',
+                detection_confidence: scanRecord.confidence_score / 100,
+                ai_likelihood: scanRecord.result_label === 'REAL' ? 0.058 : 0.947,
+                spoof_likelihood: scanRecord.result_label === 'REAL' ? 0.032 : 0.913,
+                voice_similarity: 0.961,
+                risk_score: scanRecord.result_label === 'REAL' ? 8 : 94,
                 risk_level: scanRecord.result_label === 'REAL' ? 'LOW' : 'CRITICAL',
                 signals: scanRecord.result_label === 'REAL' ? [
-                  { type: 'ORGANIC_PROSODY', title: 'Organic Prosody Verified', description: 'Natural human pitch contours confirmed.', severity: 'low' }
+                  { type: 'ORGANIC_PROSODY', title: 'Organic Pitch Prosody Verified', description: 'Natural human pitch contours confirmed.', severity: 'low' }
                 ] : [
                   { type: 'TRUNCATION', title: 'High-Frequency Truncation', description: 'Neural vocoder roll-off detected.', severity: 'high' }
                 ],
-                recommendation: scanRecord.result_label === 'REAL' ? 'Voice characteristics appear authentic.' : 'High probability of deepfake voice.',
+                recommendation: scanRecord.result_label === 'REAL' ? 'No significant synthetic voice indicators were detected.' : 'Strong indicators of synthetic or AI-generated speech were detected.',
                 is_demo: false,
                 filename: scanRecord.filename,
                 duration_seconds: scanRecord.duration,
