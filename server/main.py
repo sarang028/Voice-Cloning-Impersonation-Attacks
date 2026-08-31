@@ -20,8 +20,8 @@ logger = logging.getLogger("VoxShieldBackend")
 
 app = FastAPI(
     title="VoxShield AI Backend Server",
-    description="Real-Time Voice Authenticity Detection API Engine",
-    version="2.1.0"
+    description="Real-Time Voice Authenticity & Deepfake Detection Engine",
+    version="2.5.0"
 )
 
 # Enable CORS for React frontend
@@ -55,21 +55,31 @@ class AnalysisResponse(BaseModel):
     duration_seconds: float
     detection_engine: str
 
-# Audio Signal Processing & Classification Engine
-def process_audio_buffer(audio_bytes: bytes, filename: str) -> dict:
+# ---------------------------------------------------------------------
+# REAL ACOUSTIC SIGNAL PROCESSING ENGINE (100% Deterministic DSP)
+# ---------------------------------------------------------------------
+def analyze_real_audio_dsp(audio_bytes: bytes, filename: str) -> dict:
+    """
+    Decodes actual recorded PCM audio samples and extracts mathematical acoustic features:
+    1. Pitch Standard Deviation (F0 prosody variance) via Frame Autocorrelation.
+    2. High Frequency Energy Roll-off Ratio above 7.5 kHz via Short-Time Fourier Transform (STFT).
+    3. Zero-Crossing Rate (ZCR) Mean and Variance.
+    Zero random numbers. Zero filename string matching. Pure acoustic signal evaluation.
+    """
     sample_rate = 44100
     signal_data = np.array([], dtype=np.float32)
 
+    # 1. Decode Audio Bytes
     try:
         sr, data = wavfile.read(io.BytesIO(audio_bytes))
         sample_rate = sr
         if data.ndim > 1:
-            data = data.mean(axis=1)
+            data = data.mean(axis=1) # Convert multi-channel to mono
         signal_data = data.astype(np.float32)
         if np.abs(signal_data).max() > 0:
             signal_data = signal_data / np.abs(signal_data).max()
     except Exception as e:
-        logger.warning(f"SciPy WAV decode fallback for {filename}: {e}")
+        logger.warning(f"SciPy WAV header decode failed for {filename}: {e}. Fallback to PCM raw buffer parse.")
         if len(audio_bytes) >= 44 and audio_bytes[:4] == b'RIFF':
             int_array = np.frombuffer(audio_bytes[44:], dtype=np.int16)
         else:
@@ -81,64 +91,68 @@ def process_audio_buffer(audio_bytes: bytes, filename: str) -> dict:
 
     duration = len(signal_data) / max(1, sample_rate)
 
-    # 1. Validation Checks
+    # 2. Audio Validation Checks
     if len(signal_data) == 0 or duration < 0.5:
         raise HTTPException(
             status_code=400,
             detail="Audio could not be analyzed. Please record at least 1.0 second of audible speech."
         )
 
-    rms_energy = np.sqrt(np.mean(signal_data**2))
+    rms_energy = float(np.sqrt(np.mean(signal_data**2)))
     if rms_energy < 0.001:
         raise HTTPException(
             status_code=400,
-            detail="Audio recording is completely silent. Please speak into the microphone."
+            detail="Audio recording is silent. Please speak clearly into the microphone."
         )
 
-    # 2. Spectral & Pitch Feature Extraction
+    # 3. STFT Spectrogram & High Frequency Roll-Off (> 7.5 kHz)
     frequencies, times, Sxx = spectrogram(signal_data, fs=sample_rate, nperseg=1024)
     if Sxx.shape[0] == 0 or Sxx.shape[1] == 0:
-        truncation_ratio = 0.0
+        high_freq_ratio = 0.05
     else:
         high_freq_mask = frequencies > 7500
-        total_power = np.sum(Sxx)
-        high_freq_power = np.sum(Sxx[high_freq_mask, :]) if np.any(high_freq_mask) else 0.0
-        power_ratio = high_freq_power / (total_power + 1e-9)
-        truncation_ratio = 1.0 if power_ratio < 0.005 else max(0.0, 1.0 - (power_ratio * 30))
+        total_power = float(np.sum(Sxx))
+        high_freq_power = float(np.sum(Sxx[high_freq_mask, :])) if np.any(high_freq_mask) else 0.0
+        high_freq_ratio = high_freq_power / (total_power + 1e-9)
 
-    frame_len = int(sample_rate * 0.03)
+    # 4. Frame Autocorrelation Fundamental Frequency (F0 Pitch Tracking)
+    frame_len = int(sample_rate * 0.03) # 30ms window
     num_frames = len(signal_data) // frame_len
 
     pitch_estimates = []
+    zero_crossings = []
+
     for i in range(num_frames):
         frame = signal_data[i * frame_len : (i + 1) * frame_len]
-        if len(frame) > 0 and np.std(frame) > 0.01:
-            autocorr = np.correlate(frame, frame, mode='full')
-            autocorr = autocorr[len(autocorr)//2:]
-            d = np.diff(autocorr)
-            start_lags = np.where(d > 0)[0]
-            if len(start_lags) > 0:
-                peak_lag = start_lags[0] + np.argmax(autocorr[start_lags[0]:])
-                if peak_lag > 0:
-                    pitch = sample_rate / peak_lag
-                    if 70 <= pitch <= 450:
-                        pitch_estimates.append(pitch)
+        if len(frame) > 0:
+            # Zero-Crossing Rate
+            zcr = float(np.mean(np.abs(np.diff(np.sign(frame))))) / 2.0
+            zero_crossings.append(zcr)
 
-    pitch_std = float(np.std(pitch_estimates)) if len(pitch_estimates) > 2 else 15.0
+            if np.std(frame) > 0.01:
+                autocorr = np.correlate(frame, frame, mode='full')
+                autocorr = autocorr[len(autocorr)//2:]
+                d = np.diff(autocorr)
+                start_lags = np.where(d > 0)[0]
+                if len(start_lags) > 0:
+                    peak_lag = start_lags[0] + np.argmax(autocorr[start_lags[0]:])
+                    if peak_lag > 0:
+                        pitch = sample_rate / peak_lag
+                        if 70 <= pitch <= 450:
+                            pitch_estimates.append(pitch)
 
-    # 3. Primary Classification Logic (Product Rule Hierarchy)
-    fn_lower = filename.lower()
-    is_explicit_fake = any(k in fn_lower for k in ["ai_", "synth", "fake", "deepfake"])
-    is_explicit_clone = any(k in fn_lower for k in ["clone", "impersonat"])
-    is_explicit_replay = any(k in fn_lower for k in ["replay", "playback"])
-    is_explicit_human = any(k in fn_lower for k in ["human", "authentic", "real", "mic_rec"])
+    pitch_std = float(np.std(pitch_estimates)) if len(pitch_estimates) >= 3 else 18.5
+    mean_zcr = float(np.mean(zero_crossings)) if len(zero_crossings) > 0 else 0.08
 
+    logger.info(f"DSP Feature Extraction [{filename}]: duration={duration:.2f}s, RMS={rms_energy:.4f}, Pitch SD={pitch_std:.2f}Hz, HighFreqRatio={high_freq_ratio:.6f}, ZCR={mean_zcr:.4f}")
+
+    # 5. Deterministic Feature-Based Classification
     signals: List[ForensicSignal] = []
 
-    # Case A: Low speech duration / low SNR (UNKNOWN)
-    if duration < 0.8 and not (is_explicit_fake or is_explicit_human or is_explicit_clone):
+    # Case A: Short duration or noisy low-confidence recording
+    if duration < 0.9:
         classification = "UNKNOWN"
-        detection_confidence = 0.45
+        detection_confidence = 0.48
         ai_likelihood = 0.50
         spoof_likelihood = 0.40
         voice_similarity = 0.50
@@ -146,85 +160,53 @@ def process_audio_buffer(audio_bytes: bytes, filename: str) -> dict:
         risk_level = "MEDIUM"
         recommendation = "Insufficient evidence to confidently classify this audio. Record a longer and clearer sample."
         signals.append(ForensicSignal(
-            type="INSUFFICIENT_DURATION",
+            type="SHORT_DURATION",
             title="Short Audio Duration",
-            description="Audio clip is less than 1.0 second. Feature extraction confidence is reduced.",
+            description=f"Recording duration ({duration:.2f}s) is under 1.0 second. Pitch tracking confidence is reduced.",
             severity="medium"
         ))
 
-    # Case B: Voice Cloning
-    elif is_explicit_clone:
-        classification = "VOICE_CLONED"
-        detection_confidence = 0.958
-        ai_likelihood = 0.962
-        spoof_likelihood = 0.945
-        voice_similarity = 0.912
-        risk_score = 96
-        risk_level = "CRITICAL"
-        recommendation = "Audio characteristics are consistent with synthetic voice cloning. Require multi-factor out-of-band identity verification."
-        signals.append(ForensicSignal(
-            type="VOICEPRINT_IMPERSONATION",
-            title="Voiceprint Baseline Deviation",
-            description="Speaker spectral formant envelope matches synthetic neural voice cloning models.",
-            severity="high"
-        ))
-        signals.append(ForensicSignal(
-            type="MONOTONE_PITCH",
-            title="Monotone Pitch Quantization",
-            description=f"Unnatural pitch variance standard deviation ({pitch_std:.1f} Hz).",
-            severity="high"
-        ))
-
-    # Case C: Explicit AI Generated or Monotone Pitch (<5Hz)
-    elif is_explicit_fake or pitch_std < 5.0:
+    # Case B: AI-Generated / Synthetic Speech (Flat Pitch SD < 6.0 Hz OR High Frequency Roll-Off < 0.003)
+    elif pitch_std < 6.0 or high_freq_ratio < 0.003:
         classification = "AI_GENERATED"
-        detection_confidence = float(np.clip(0.94 + np.random.random()*0.03, 0.92, 0.98))
-        ai_likelihood = float(np.clip(0.93 + np.random.random()*0.04, 0.90, 0.98))
-        spoof_likelihood = float(np.clip(ai_likelihood * 0.96, 0.86, 0.96))
-        voice_similarity = 0.885
+        # Deterministic formula based on pitch flatness & spectral cutoff
+        raw_ai_score = 0.88 + min(0.10, (6.0 - pitch_std) * 0.015 + (0.003 - high_freq_ratio) * 10.0)
+        ai_likelihood = float(np.clip(raw_ai_score, 0.88, 0.98))
+        spoof_likelihood = float(np.clip(ai_likelihood * 0.95, 0.84, 0.96))
+        detection_confidence = float(np.clip(0.92 + (ai_likelihood * 0.06), 0.90, 0.98))
+        voice_similarity = 0.88
         risk_score = int(round(ai_likelihood * 100))
         risk_level = "CRITICAL"
         recommendation = "Strong indicators of synthetic or AI-generated speech were detected. Halt sensitive transactions."
-        signals.append(ForensicSignal(
-            type="HIGH_FREQUENCY_TRUNCATION",
-            title="High-Frequency Truncation Artifacts",
-            description="Abrupt spectral roll-off above 7.5kHz typical of neural vocoder speech synthesizers.",
-            severity="high"
-        ))
-        signals.append(ForensicSignal(
-            type="MONOTONE_PITCH",
-            title="Monotone Pitch Quantization",
-            description=f"Pitch variance standard deviation is unnaturally flat ({pitch_std:.1f} Hz).",
-            severity="high"
-        ))
 
-    # Case D: Replay Attack
-    elif is_explicit_replay:
-        classification = "REPLAY_ATTACK"
-        detection_confidence = 0.915
-        ai_likelihood = 0.650
-        spoof_likelihood = 0.880
-        voice_similarity = 0.820
-        risk_score = 78
-        risk_level = "HIGH"
-        recommendation = "This audio may be a recording being replayed rather than a live voice. Request live challenge-response phrase."
-        signals.append(ForensicSignal(
-            type="ACOUSTIC_REVERBERATION",
-            title="Secondary Acoustic Impulse Response",
-            description="Room acoustics indicate playback through secondary speaker hardware.",
-            severity="high"
-        ))
+        if high_freq_ratio < 0.003:
+            signals.append(ForensicSignal(
+                type="HIGH_FREQUENCY_TRUNCATION",
+                title="High-Frequency Truncation Artifacts",
+                description=f"Abrupt spectral roll-off above 7.5kHz (High Freq Power Ratio: {high_freq_ratio:.5f}). Typical of neural vocoder speech synthesizers.",
+                severity="high"
+            ))
+        if pitch_std < 6.0:
+            signals.append(ForensicSignal(
+                type="MONOTONE_PITCH",
+                title="Monotone Pitch Quantization",
+                description=f"Pitch variance standard deviation is unnaturally flat ({pitch_std:.1f} Hz). Lacks natural prosody.",
+                severity="high"
+            ))
 
-    # Case E: Human Voice (Explicit Human or Natural Prosody pitch_std >= 5.0)
+    # Case C: Authentic Human Voice (Natural Pitch Variance Pitch SD >= 6.0 Hz)
     else:
         classification = "HUMAN"
-        detection_confidence = float(np.clip(0.92 + (pitch_std / 120.0), 0.90, 0.97))
-        ai_likelihood = float(np.clip(0.03 + (1.0 / (pitch_std + 1.0))*0.15, 0.02, 0.09))
-        spoof_likelihood = float(np.clip(ai_likelihood * 0.55, 0.01, 0.06))
+        # Deterministic human score calculation
+        raw_human_ai_score = max(0.02, min(0.09, 0.12 - (pitch_std / 300.0)))
+        ai_likelihood = float(np.round(raw_human_ai_score, 3))
+        spoof_likelihood = float(np.round(ai_likelihood * 0.55, 3))
+        detection_confidence = float(np.clip(0.91 + min(0.07, pitch_std / 250.0), 0.90, 0.98))
         voice_similarity = 0.965
         risk_score = int(round(ai_likelihood * 100))
         risk_level = "LOW"
         recommendation = "No significant synthetic voice indicators were detected."
+
         signals.append(ForensicSignal(
             type="ORGANIC_PROSODY",
             title="Organic Pitch Prosody Verified",
@@ -251,13 +233,15 @@ def process_audio_buffer(audio_bytes: bytes, filename: str) -> dict:
         "is_demo": False,
         "filename": filename,
         "duration_seconds": round(duration, 2),
-        "detection_engine": "VoxShield RealVoiceDetector v2.1 (DSP Engine)"
+        "detection_engine": "VoxShield Acoustic Signal DSP Engine v2.5 (SciPy FFT / Pitch Autocorrelation)"
     }
 
-# VoiceGuard REST API proxy handler (if VOICEGUARD_API_KEY is set)
+# ---------------------------------------------------------------------
+# VOICEGUARD REST API CLOUD CONNECTOR (If API Key Configured)
+# ---------------------------------------------------------------------
 async def call_voiceguard_api(audio_bytes: bytes, filename: str, api_key: str) -> Optional[dict]:
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=8.0) as client:
             files = {"file": (filename, audio_bytes, "audio/wav")}
             headers = {"Authorization": f"Bearer {api_key}"}
             response = await client.post(
@@ -267,10 +251,10 @@ async def call_voiceguard_api(audio_bytes: bytes, filename: str, api_key: str) -
             )
             if response.status_code == 200:
                 data = response.json()
-                logger.info(f"VoiceGuard API response: {data}")
+                logger.info(f"VoiceGuard API cloud response for {filename}: {data}")
                 return data
     except Exception as e:
-        logger.warning(f"VoiceGuard API request failed: {e}")
+        logger.warning(f"VoiceGuard Cloud API request failed: {e}")
     return None
 
 @app.get("/")
@@ -278,7 +262,7 @@ def health_check():
     return {
         "status": "healthy",
         "system": "VoxShield Real-Time Detection Backend",
-        "version": "2.1.0",
+        "version": "2.5.0",
         "voiceguard_api_configured": bool(os.getenv("VOICEGUARD_API_KEY"))
     }
 
@@ -300,7 +284,7 @@ async def analyze_audio_endpoint(
     if len(audio_bytes) > 50 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Audio file exceeds maximum 50MB size limit.")
 
-    # 1. VoiceGuard Cloud API if configured
+    # 1. VoiceGuard Cloud API (If API key is set in .env)
     voiceguard_key = os.getenv("VOICEGUARD_API_KEY")
     if voiceguard_key and not demo_flag:
         vg_result = await call_voiceguard_api(audio_bytes, filename, voiceguard_key)
@@ -318,13 +302,14 @@ async def analyze_audio_endpoint(
                 is_demo=False,
                 filename=filename,
                 duration_seconds=vg_result.get("duration", 3.0),
-                detection_engine="VoiceGuard REST API Cloud"
+                detection_engine="VoiceGuard REST API Cloud (Production ML Model)"
             )
 
-    # 2. Production RealVoiceDetector
-    result = process_audio_buffer(audio_bytes, filename)
+    # 2. Production RealVoiceDetector (Local SciPy Mathematical DSP Engine)
+    result = analyze_real_audio_dsp(audio_bytes, filename)
     if demo_flag:
         result["is_demo"] = True
+        result["detection_engine"] = "VoxShield Simulated Demo Engine"
 
     return AnalysisResponse(**result)
 
