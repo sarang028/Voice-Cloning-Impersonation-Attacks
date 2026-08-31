@@ -35,7 +35,6 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioChunksRef.current = [];
 
-      // Audio Context for live visualization
       const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
       audioCtxRef.current = audioCtx;
       const source = audioCtx.createMediaStreamSource(stream);
@@ -46,7 +45,6 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
       const bufferLength = analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
 
-      // Render Visualizer Bars on Canvas
       const drawVisualizer = () => {
         if (!canvasRef.current) return;
         const canvas = canvasRef.current;
@@ -56,14 +54,14 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
         analyser.getByteFrequencyData(dataArray);
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        const barWidth = (canvas.width / bufferLength) * 1.5;
+        const barWidth = (canvas.width / bufferLength) * 1.4;
         let x = 0;
 
         for (let i = 0; i < bufferLength; i++) {
           const barHeight = (dataArray[i] / 255) * canvas.height;
           const gradient = ctx.createLinearGradient(0, canvas.height, 0, 0);
-          gradient.addColorStop(0, '#00f2fe');
-          gradient.addColorStop(1, '#8b5cf6');
+          gradient.addColorStop(0, '#22C55E');
+          gradient.addColorStop(1, '#38BDF8');
 
           ctx.fillStyle = gradient;
           ctx.fillRect(x, canvas.height - barHeight, barWidth - 2, barHeight);
@@ -75,7 +73,6 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
 
       drawVisualizer();
 
-      // MediaRecorder setup
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
 
@@ -86,12 +83,16 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
       };
 
       mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        const audioFile = new File([audioBlob], `live_rec_${Date.now()}.wav`, { type: 'audio/wav' });
-        
-        // Stop stream tracks
         stream.getTracks().forEach((track) => track.stop());
         if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        const audioFile = new File([audioBlob], `mic_recording_${Date.now()}.wav`, { type: 'audio/wav' });
+
+        if (recordingTime < 1) {
+          setPermissionError('Audio recording is too short (< 1.0 second). Please record at least 1-2 seconds of audible speech.');
+          return;
+        }
 
         onRecordingComplete(audioFile);
       };
@@ -104,7 +105,7 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
         setRecordingTime((prev) => prev + 1);
       }, 1000);
     } catch (err: unknown) {
-      console.error('Microphone error:', err);
+      console.error('Microphone access error:', err);
       const error = err as Error;
       setPermissionError(error.message || 'Microphone access denied. Please grant permission in browser settings.');
     }
@@ -125,21 +126,21 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
   };
 
   return (
-    <div className="glass-card" style={{ padding: '32px', textAlign: 'center' }}>
+    <div className="vox-card" style={{ padding: '36px', textAlign: 'center' }}>
       <div style={{ marginBottom: '24px' }}>
-        <h3 style={{ fontSize: '1.25rem', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '10px' }}>
-          <Mic size={22} color="var(--primary-cyan)" />
-          Live Voice Recording & Instant Verification
+        <h3 style={{ fontSize: '1.3rem', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '10px' }}>
+          <Mic size={22} color="var(--brand-green)" />
+          Live Microphone Recording & Real-Time Inspection
         </h3>
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem', marginTop: '4px' }}>
-          Speak into your microphone to verify live human voice authenticity against synthetic AI clones.
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '4px' }}>
+          Speak into your microphone for at least 1-2 seconds to analyze live human voice authenticity against synthetic AI clones.
         </p>
       </div>
 
-      {/* Visualizer Canvas */}
+      {/* Visualizer Canvas Box */}
       <div style={{
-        background: 'rgba(9, 13, 22, 0.7)',
-        border: '1px solid var(--border-color)',
+        background: '#07101C',
+        border: '1px solid rgba(255, 255, 255, 0.08)',
         borderRadius: '16px',
         padding: '24px',
         maxWidth: '480px',
@@ -155,26 +156,27 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
           style={{ width: '100%', height: '72px', borderRadius: '8px' }}
         />
 
-        <div style={{ marginTop: '16px', fontSize: '1.6rem', fontWeight: 800, fontFamily: 'var(--font-heading)', color: isRecording ? 'var(--primary-cyan)' : 'var(--text-dim)' }}>
+        <div style={{ marginTop: '16px', fontSize: '1.8rem', fontWeight: 800, fontFamily: 'var(--font-heading)', color: isRecording ? '#22C55E' : '#94A3B8' }}>
           {formatTimer(recordingTime)}
         </div>
-        <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', letterSpacing: '0.05em' }}>
-          {isRecording ? 'LIVE RECORDING IN PROGRESS' : 'READY TO RECORD'}
+        <span style={{ fontSize: '0.75rem', color: '#94A3B8', fontWeight: 700, letterSpacing: '0.05em' }}>
+          {isRecording ? '● LIVE MICROPHONE RECORDING' : 'READY TO RECORD'}
         </span>
       </div>
 
       {permissionError && (
         <div style={{
           marginBottom: '20px',
-          background: 'rgba(239, 68, 68, 0.15)',
-          border: '1px solid rgba(239, 68, 68, 0.3)',
+          background: '#FEF2F2',
+          border: '1px solid #FCA5A5',
           padding: '12px 16px',
           borderRadius: '10px',
-          color: '#fca5a5',
+          color: '#991B1B',
           fontSize: '0.88rem',
           display: 'inline-flex',
           alignItems: 'center',
-          gap: '10px'
+          gap: '10px',
+          maxWidth: '520px'
         }}>
           <AlertCircle size={18} />
           {permissionError}
@@ -185,10 +187,10 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
       <div>
         {!isRecording ? (
           <button
-            className="btn-primary"
+            className="btn-vox-green"
             onClick={startRecording}
             disabled={isAnalyzing}
-            style={{ padding: '14px 32px', fontSize: '1rem', borderRadius: '30px' }}
+            style={{ padding: '14px 36px', fontSize: '1rem', borderRadius: '30px' }}
           >
             <Mic size={20} />
             Start Microphone Recording
@@ -197,20 +199,20 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
           <button
             onClick={stopRecording}
             style={{
-              background: 'rgba(239, 68, 68, 0.2)',
-              border: '2px solid rgba(239, 68, 68, 0.6)',
-              color: '#fca5a5',
-              padding: '14px 32px',
+              background: '#DC2626',
+              color: '#FFFFFF',
+              border: 'none',
+              padding: '14px 36px',
               borderRadius: '30px',
-              fontWeight: 700,
+              fontWeight: 800,
               cursor: 'pointer',
               display: 'inline-flex',
               alignItems: 'center',
               gap: '10px',
-              boxShadow: '0 0 20px rgba(239, 68, 68, 0.4)'
+              boxShadow: '0 4px 20px rgba(220, 38, 38, 0.4)'
             }}
           >
-            <Square size={20} fill="#fca5a5" />
+            <Square size={20} fill="#FFFFFF" />
             Stop & Analyze Live Voice
           </button>
         )}
