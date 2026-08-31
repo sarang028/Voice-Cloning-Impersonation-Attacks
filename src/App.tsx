@@ -101,21 +101,22 @@ function App() {
       for (let i = 0; i < totalSamples; i++) {
         const t = i / sampleRate;
         if (sampleType === 'real') {
-          // Human voice with natural pitch variance
-          const f0 = 135 + Math.sin(t * 7) * 25 + Math.cos(t * 3) * 12;
+          // Human voice: organic pitch variance + full vocal formants + ambient high frequency acoustic noise
+          const f0 = 140 + Math.sin(t * 6) * 30 + Math.cos(t * 11) * 15;
           const wave =
-            Math.sin(2 * Math.PI * f0 * t) * 0.4 +
-            Math.sin(2 * Math.PI * f0 * 2 * t) * 0.2 +
-            Math.sin(2 * Math.PI * f0 * 3 * t) * 0.1;
+            Math.sin(2 * Math.PI * f0 * t) * 0.35 +
+            Math.sin(2 * Math.PI * f0 * 2 * t) * 0.25 +
+            Math.sin(2 * Math.PI * f0 * 3 * t) * 0.15 +
+            Math.sin(2 * Math.PI * f0 * 4 * t) * 0.08 +
+            Math.sin(2 * Math.PI * 8500 * t) * 0.03;
           const envelope = Math.sin((t / duration) * Math.PI);
-          data[i] = wave * envelope * (0.8 + Math.random() * 0.05);
+          data[i] = (wave + (Math.random() - 0.5) * 0.02) * envelope;
         } else {
-          // AI voice clone sample: flat monotone pitch + high frequency artificial cutoff
+          // AI voice clone sample: flat monotone pitch (165Hz flat) + zero high-frequency roll-off
           const f0 = 165;
-          const wave = Math.sin(2 * Math.PI * f0 * t) * 0.5 + Math.sin(2 * Math.PI * f0 * 2 * t) * 0.3;
-          const buzz = Math.sin(2 * Math.PI * 4200 * t) * 0.04;
+          const wave = Math.sin(2 * Math.PI * f0 * t) * 0.6 + Math.sin(2 * Math.PI * f0 * 2 * t) * 0.3;
           const envelope = t > 0.1 && t < duration - 0.1 ? 1 : 0;
-          data[i] = (wave + buzz) * envelope;
+          data[i] = wave * envelope;
         }
       }
 
